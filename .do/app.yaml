@@ -34,6 +34,14 @@ services:
         scope: RUN_TIME
         type: SECRET
         value: ${DATABASE_URL}
+      - key: KC_DB
+        scope: RUN_TIME
+        type: SECRET
+        value: ${KC_DB}
+      - key: KC_DB_URL
+        scope: RUN_TIME
+        type: SECRET
+        value: ${DATABASE_URL}
 
       # Production Keycloak settings
       - key: KC_HOSTNAME_STRICT

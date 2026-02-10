@@ -28,7 +28,10 @@ fi
 if [ -n "$DATABASE_URL" ]; then
     echo "Found database configuration in DATABASE_URL"
 
-    # Support both postgres:// and postgresql:// schemes
+    # Set Keycloak database configuration - let Keycloak handle URL parsing
+    export KC_DB="postgres"
+
+    # Modern Keycloak can handle PostgreSQL URLs directly, but needs JDBC format
     if [[ $DATABASE_URL =~ ^postgres(ql)?://([^:]+):([^@]+)@([^:]+):([0-9]+)/(.+)$ ]]; then
         DB_USERNAME="${BASH_REMATCH[2]}"
         DB_PASSWORD="${BASH_REMATCH[3]}"
@@ -36,13 +39,19 @@ if [ -n "$DATABASE_URL" ]; then
         DB_PORT="${BASH_REMATCH[5]}"
         DB_NAME="${BASH_REMATCH[6]}"
 
-        # Set Keycloak database configuration
-        export KC_DB="postgres"
-        export KC_DB_URL="jdbc:postgresql://$DB_HOST:$DB_PORT/$DB_NAME"
+        # Extract query parameters (like ?sslmode=require)
+        if [[ $DB_NAME =~ ^([^?]+)(.*)$ ]]; then
+            DB_NAME="${BASH_REMATCH[1]}"
+            DB_PARAMS="${BASH_REMATCH[2]}"
+        fi
+
+        # Set Keycloak database configuration in JDBC format
+        export KC_DB_URL="jdbc:postgresql://$DB_HOST:$DB_PORT/$DB_NAME$DB_PARAMS"
         export KC_DB_USERNAME="$DB_USERNAME"
         export KC_DB_PASSWORD="$DB_PASSWORD"
 
-        echo "Configured PostgreSQL: $DB_HOST:$DB_PORT/$DB_NAME"
+        echo "Configured PostgreSQL JDBC: $KC_DB_URL"
+        echo "Database user: $DB_USERNAME"
     else
         echo "WARNING: Could not parse DATABASE_URL format: $DATABASE_URL"
     fi
@@ -57,22 +66,28 @@ fi
 # Configure for App Platform deployment
 export KC_HTTP_PORT="$PORT"
 export KC_HTTP_ENABLED="true"
-export KC_HOSTNAME_STRICT="false"
-export KC_HOSTNAME_STRICT_HTTPS="false"
 
-# Set proxy mode for load balancers (DigitalOcean App Platform)
-export KC_PROXY="${KC_PROXY:-edge}"
+# Don't override hostname settings - let environment variables take precedence
+# export KC_HOSTNAME_STRICT="false"
+# export KC_HOSTNAME_STRICT_HTTPS="false"
 
-# Health check endpoints
-export KC_HEALTH_ENABLED="true"
+# Set proxy mode for load balancers (DigitalOcean App Platform) - only if not already set
+if [ -z "$KC_PROXY" ]; then
+    export KC_PROXY="edge"
+fi
 
-# Determine startup mode
-if [ "$KC_DB" = "dev-file" ] || [ -z "$DATABASE_URL" ]; then
+# Health check endpoints - only if not already set
+if [ -z "$KC_HEALTH_ENABLED" ]; then
+    export KC_HEALTH_ENABLED="true"
+fi
+
+# Always use production mode if we have a proper database
+if [ -n "$DATABASE_URL" ] && [ "$KC_DB" = "postgres" ]; then
+    STARTUP_MODE="start"
+    echo "Starting in production mode with PostgreSQL"
+else
     STARTUP_MODE="start-dev"
     echo "Starting in development mode"
-else
-    STARTUP_MODE="start"
-    echo "Starting in production mode"
 fi
 
 echo "========================================================================="
