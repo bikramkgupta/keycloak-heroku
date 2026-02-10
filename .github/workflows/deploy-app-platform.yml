@@ -1,0 +1,28 @@
+name: Deploy to App Platform
+
+on:
+  push:
+    branches: [app_platform]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Deploy to App Platform
+        run: |
+          APP_ID=$(doctl apps list --format ID,Spec.Name --no-header | grep "keycloak-heroku" | awk '{print $1}' || true)
+          if [ -z "$APP_ID" ]; then
+            echo "Creating new app..."
+            doctl apps create --spec .do/app.yaml --wait
+          else
+            echo "Updating existing app: $APP_ID"
+            doctl apps update "$APP_ID" --spec .do/app.yaml --wait
+          fi

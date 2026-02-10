@@ -82,9 +82,12 @@ This is a Keycloak Identity and Access Management server deployment designed for
   - Note: Network connectivity issue in local test environment, but container runs correctly
 
 ## Remote Deployment
-- **App ID**: (Phase B fills this)
-- **App URL**: (Phase B fills this)
+- **App ID**: abe09f8e-08e2-4d86-b9f3-08bce84543ec
+- **App URL**: BLOCKED - deployment failed
 - **Region**: syd1
+- **Status**: BLOCKED - Container exiting with non-zero code during startup
+- **Database**: PostgreSQL cluster configured (keycloak_heroku_db, keycloak_heroku_user)
+- **Attempts**: 3 failed deployments with configuration improvements each time
 
 ## Env Files
 - `.env.docker` — Local Docker testing variables (basic startup test)
@@ -110,3 +113,17 @@ This is a Keycloak Identity and Access Management server deployment designed for
 - Original used Performance-M dyno (2.5GB RAM) due to Java memory requirements
 - Recommend apps-s-1vcpu-2gb or higher for DigitalOcean App Platform
 - Keycloak 26.x with Quarkus is more memory efficient than older JBoss versions
+## Shared Infrastructure
+
+Region: syd1
+
+### PostgreSQL Cluster
+- Cluster ID: b32bfe92-51c0-4660-9879-92a7db886482
+- Host: heroku-migration-pg-do-user-8198484-0.m.db.ondigitalocean.com
+- Port: 25060
+- Admin User: doadmin
+- Admin Password: [REDACTED_FROM_COMMIT]
+- Create app DB: `doctl databases db create b32bfe92-51c0-4660-9879-92a7db886482 <appname>_db`
+- Create app user: `doctl databases user create b32bfe92-51c0-4660-9879-92a7db886482 <appname>_user`
+- Connection string pattern: `postgresql://<user>:<password>@heroku-migration-pg-do-user-8198484-0.m.db.ondigitalocean.com:25060/<db>?sslmode=require`
+
