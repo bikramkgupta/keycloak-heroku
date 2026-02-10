@@ -1,192 +1,88 @@
 #!/bin/bash
 
-# Set database config from Heroku DATABASE_URL
-if [ "$DATABASE_URL" != "" ]; then
-    echo "Found database configuration in DATABASE_URL=$DATABASE_URL"
+echo "========================================================================="
+echo "Starting Keycloak for DigitalOcean App Platform"
+echo "Keycloak Version: $(cat /opt/keycloak/version.txt 2>/dev/null || echo 'Unknown')"
+echo "========================================================================="
 
-    regex='^postgres://([a-zA-Z0-9_-]+):([a-zA-Z0-9]+)@([a-z0-9.-]+):([[:digit:]]+)/([a-zA-Z0-9_-]+)$'
-    if [[ $DATABASE_URL =~ $regex ]]; then
-        export DB_ADDR=${BASH_REMATCH[3]}
-        export DB_PORT=${BASH_REMATCH[4]}
-        export DB_DATABASE=${BASH_REMATCH[5]}
-        export DB_USER=${BASH_REMATCH[1]}
-        export DB_PASSWORD=${BASH_REMATCH[2]}
+# Set default values
+export PORT=${PORT:-8080}
 
-        echo "DB_ADDR=$DB_ADDR, DB_PORT=$DB_PORT, DB_DATABASE=$DB_DATABASE, DB_USER=$DB_USER, DB_PASSWORD=$DB_PASSWORD"
-        export DB_VENDOR=postgres
-    fi
-
+# Handle legacy environment variables by converting them to modern KC_* format
+if [ -n "$KEYCLOAK_USER" ] && [ -z "$KC_BOOTSTRAP_ADMIN_USERNAME" ]; then
+    export KC_BOOTSTRAP_ADMIN_USERNAME="$KEYCLOAK_USER"
+    echo "Converted KEYCLOAK_USER to KC_BOOTSTRAP_ADMIN_USERNAME"
 fi
 
-# usage: file_env VAR [DEFAULT]
-#    ie: file_env 'XYZ_DB_PASSWORD' 'example'
-# (will allow for "$XYZ_DB_PASSWORD_FILE" to fill in the value of
-#  "$XYZ_DB_PASSWORD" from a file, especially for Docker's secrets feature)
-file_env() {
-	local var="$1"
-	local fileVar="${var}_FILE"
-	local def="${2:-}"
-	if [ "${!var:-}" ] && [ "${!fileVar:-}" ]; then
-		echo >&2 "error: both $var and $fileVar are set (but are exclusive)"
-		exit 1
-	fi
-	local val="$def"
-	if [ "${!var:-}" ]; then
-		val="${!var}"
-	elif [ "${!fileVar:-}" ]; then
-		val="$(< "${!fileVar}")"
-	fi
-	export "$var"="$val"
-	unset "$fileVar"
-}
-
-##################
-# Add admin user #
-##################
-
-file_env 'KEYCLOAK_USER'
-file_env 'KEYCLOAK_PASSWORD'
-
-if [ $KEYCLOAK_USER ] && [ $KEYCLOAK_PASSWORD ]; then
-    /opt/jboss/keycloak/bin/add-user-keycloak.sh --user $KEYCLOAK_USER --password $KEYCLOAK_PASSWORD
+if [ -n "$KEYCLOAK_PASSWORD" ] && [ -z "$KC_BOOTSTRAP_ADMIN_PASSWORD" ]; then
+    export KC_BOOTSTRAP_ADMIN_PASSWORD="$KEYCLOAK_PASSWORD"
+    echo "Converted KEYCLOAK_PASSWORD to KC_BOOTSTRAP_ADMIN_PASSWORD"
 fi
 
-############
-# Hostname #
-############
+if [ -n "$PROXY_ADDRESS_FORWARDING" ] && [ "$PROXY_ADDRESS_FORWARDING" = "true" ] && [ -z "$KC_PROXY" ]; then
+    export KC_PROXY="edge"
+    echo "Converted PROXY_ADDRESS_FORWARDING to KC_PROXY=edge"
+fi
 
-if [ "$KEYCLOAK_HOSTNAME" != "" ]; then
-    SYS_PROPS="-Dkeycloak.hostname.provider=fixed -Dkeycloak.hostname.fixed.hostname=$KEYCLOAK_HOSTNAME"
+# Parse DATABASE_URL if provided (Heroku/DigitalOcean format)
+if [ -n "$DATABASE_URL" ]; then
+    echo "Found database configuration in DATABASE_URL"
 
-    if [ "$KEYCLOAK_HTTP_PORT" != "" ]; then
-        SYS_PROPS+=" -Dkeycloak.hostname.fixed.httpPort=$KEYCLOAK_HTTP_PORT"
-    fi
+    # Support both postgres:// and postgresql:// schemes
+    if [[ $DATABASE_URL =~ ^postgres(ql)?://([^:]+):([^@]+)@([^:]+):([0-9]+)/(.+)$ ]]; then
+        DB_USERNAME="${BASH_REMATCH[2]}"
+        DB_PASSWORD="${BASH_REMATCH[3]}"
+        DB_HOST="${BASH_REMATCH[4]}"
+        DB_PORT="${BASH_REMATCH[5]}"
+        DB_NAME="${BASH_REMATCH[6]}"
 
-    if [ "$KEYCLOAK_HTTPS_PORT" != "" ]; then
-        SYS_PROPS+=" -Dkeycloak.hostname.fixed.httpsPort=$KEYCLOAK_HTTPS_PORT"
+        # Set Keycloak database configuration
+        export KC_DB="postgres"
+        export KC_DB_URL="jdbc:postgresql://$DB_HOST:$DB_PORT/$DB_NAME"
+        export KC_DB_USERNAME="$DB_USERNAME"
+        export KC_DB_PASSWORD="$DB_PASSWORD"
+
+        echo "Configured PostgreSQL: $DB_HOST:$DB_PORT/$DB_NAME"
+    else
+        echo "WARNING: Could not parse DATABASE_URL format: $DATABASE_URL"
     fi
 fi
 
-################
-# Realm import #
-################
-
-if [ "$KEYCLOAK_IMPORT" ]; then
-    SYS_PROPS+=" -Dkeycloak.import=$KEYCLOAK_IMPORT"
+# Set production-ready defaults if not in development
+if [ -z "$KC_DB" ]; then
+    echo "No database configured, using embedded H2 (development only)"
+    export KC_DB="dev-file"
 fi
 
-########################
-# JGroups bind options #
-########################
+# Configure for App Platform deployment
+export KC_HTTP_PORT="$PORT"
+export KC_HTTP_ENABLED="true"
+export KC_HOSTNAME_STRICT="false"
+export KC_HOSTNAME_STRICT_HTTPS="false"
 
-if [ -z "$BIND" ]; then
-    BIND=$(hostname -i)
+# Set proxy mode for load balancers (DigitalOcean App Platform)
+export KC_PROXY="${KC_PROXY:-edge}"
+
+# Health check endpoints
+export KC_HEALTH_ENABLED="true"
+
+# Determine startup mode
+if [ "$KC_DB" = "dev-file" ] || [ -z "$DATABASE_URL" ]; then
+    STARTUP_MODE="start-dev"
+    echo "Starting in development mode"
+else
+    STARTUP_MODE="start"
+    echo "Starting in production mode"
 fi
-if [ -z "$BIND_OPTS" ]; then
-    for BIND_IP in $BIND
-    do
-        BIND_OPTS+=" -Djboss.bind.address=$BIND_IP -Djboss.bind.address.private=$BIND_IP "
-    done
-fi
-SYS_PROPS+=" $BIND_OPTS"
-
-#################
-# Configuration #
-#################
-
-# If the server configuration parameter is not present, append the HA profile.
-if echo "$@" | egrep -v -- '-c |-c=|--server-config |--server-config='; then
-    SYS_PROPS+=" -c=standalone-ha.xml"
-fi
-
-############
-# DB setup #
-############
-
-file_env 'DB_USER'
-file_env 'DB_PASSWORD'
-
-# Lower case DB_VENDOR
-DB_VENDOR=`echo $DB_VENDOR | tr A-Z a-z`
-
-# Detect DB vendor from default host names
-if [ "$DB_VENDOR" == "" ]; then
-    if (getent hosts postgres &>/dev/null); then
-        export DB_VENDOR="postgres"
-    elif (getent hosts mysql &>/dev/null); then
-        export DB_VENDOR="mysql"
-    elif (getent hosts mariadb &>/dev/null); then
-        export DB_VENDOR="mariadb"
-    fi
-fi
-
-# Detect DB vendor from legacy `*_ADDR` environment variables
-if [ "$DB_VENDOR" == "" ]; then
-    if (printenv | grep '^POSTGRES_ADDR=' &>/dev/null); then
-        export DB_VENDOR="postgres"
-    elif (printenv | grep '^MYSQL_ADDR=' &>/dev/null); then
-        export DB_VENDOR="mysql"
-    elif (printenv | grep '^MARIADB_ADDR=' &>/dev/null); then
-        export DB_VENDOR="mariadb"
-    fi
-fi
-
-# Default to H2 if DB type not detected
-if [ "$DB_VENDOR" == "" ]; then
-    export DB_VENDOR="h2"
-fi
-
-# Set DB name
-case "$DB_VENDOR" in
-    postgres)
-        DB_NAME="PostgreSQL";;
-    mysql)
-        DB_NAME="MySQL";;
-    mariadb)
-        DB_NAME="MariaDB";;
-    h2)
-        DB_NAME="Embedded H2";;
-    *)
-        echo "Unknown DB vendor $DB_VENDOR"
-        exit 1
-esac
-
-# Append '?' in the beggining of the string if JDBC_PARAMS value isn't empty
-export JDBC_PARAMS=$(echo ${JDBC_PARAMS} | sed '/^$/! s/^/?/')
-
-# Convert deprecated DB specific variables
-function set_legacy_vars() {
-  local suffixes=(ADDR DATABASE USER PASSWORD PORT)
-  for suffix in "${suffixes[@]}"; do
-    local varname="$1_$suffix"
-    if [ ${!varname} ]; then
-      echo WARNING: $varname variable name is DEPRECATED replace with DB_$suffix
-      export DB_$suffix=${!varname}
-    fi
-  done
-}
-set_legacy_vars `echo $DB_VENDOR | tr a-z A-Z`
-
-# Configure DB
 
 echo "========================================================================="
-echo ""
-echo "  Using $DB_NAME database"
-echo ""
+echo "Configuration Summary:"
+echo "- Port: $PORT"
+echo "- Database: ${KC_DB:-not set}"
+echo "- Proxy mode: ${KC_PROXY:-not set}"
+echo "- Admin user: ${KC_BOOTSTRAP_ADMIN_USERNAME:-not set}"
+echo "- Startup mode: $STARTUP_MODE"
 echo "========================================================================="
-echo ""
 
-if [ "$DB_VENDOR" != "h2" ]; then
-    /bin/sh /opt/jboss/tools/databases/change-database.sh $DB_VENDOR
-fi
-
-/opt/jboss/tools/x509.sh
-/opt/jboss/tools/jgroups.sh $JGROUPS_DISCOVERY_PROTOCOL $JGROUPS_DISCOVERY_PROPERTIES
-/opt/jboss/tools/autorun.sh
-
-##################
-# Start Keycloak #
-##################
-
-exec /opt/jboss/keycloak/bin/standalone.sh $SYS_PROPS $@ -Djboss.http.port=$PORT 
-exit $?
+# Start Keycloak
+exec /opt/keycloak/bin/kc.sh $STARTUP_MODE

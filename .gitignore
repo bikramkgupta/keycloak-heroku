@@ -1,1 +1,7 @@
 *~
+
+# Environment files
+.env.docker
+.env.remote
+.env.local
+.env

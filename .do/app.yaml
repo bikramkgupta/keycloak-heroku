@@ -1,0 +1,55 @@
+name: keycloak-heroku
+region: syd1
+
+services:
+  - name: keycloak
+    github:
+      repo: bikramkgupta/keycloak-heroku
+      branch: app_platform
+      deploy_on_push: true
+    dockerfile_path: Dockerfile
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-2gb
+    health_check:
+      http_path: /health/ready
+      initial_delay_seconds: 60
+      period_seconds: 10
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3
+    envs:
+      # Keycloak admin configuration
+      - key: KC_BOOTSTRAP_ADMIN_USERNAME
+        scope: RUN_TIME
+        type: SECRET
+        value: ${KC_BOOTSTRAP_ADMIN_USERNAME}
+      - key: KC_BOOTSTRAP_ADMIN_PASSWORD
+        scope: RUN_TIME
+        type: SECRET
+        value: ${KC_BOOTSTRAP_ADMIN_PASSWORD}
+
+      # Database configuration (will be set by Phase B)
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        type: SECRET
+        value: ${DATABASE_URL}
+
+      # Production Keycloak settings
+      - key: KC_HOSTNAME_STRICT
+        scope: RUN_TIME
+        value: "true"
+      - key: KC_HOSTNAME_STRICT_HTTPS
+        scope: RUN_TIME
+        value: "true"
+      - key: KC_PROXY
+        scope: RUN_TIME
+        value: "edge"
+      - key: KC_HEALTH_ENABLED
+        scope: RUN_TIME
+        value: "true"
+
+      # App Platform specific
+      - key: PORT
+        scope: RUN_TIME
+        value: "8080"

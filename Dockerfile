@@ -1,7 +1,15 @@
-FROM jboss/keycloak:latest
+FROM quay.io/keycloak/keycloak:latest
 
-COPY docker-entrypoint.sh /opt/jboss/tools
+# Copy custom entrypoint for DigitalOcean App Platform
+COPY docker-entrypoint.sh /opt/keycloak/bin/
 
-ENTRYPOINT [ "/opt/jboss/tools/docker-entrypoint.sh" ]
-CMD ["-b", "0.0.0.0"]
+# Set proper permissions
+USER root
+RUN chmod +x /opt/keycloak/bin/docker-entrypoint.sh
+USER keycloak
+
+# Expose port (App Platform will set PORT env var)
+EXPOSE 8080
+
+ENTRYPOINT ["/opt/keycloak/bin/docker-entrypoint.sh"]
 
